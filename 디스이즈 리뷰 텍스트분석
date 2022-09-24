@@ -1,0 +1,169 @@
+library(dplyr)
+library(readr)
+
+thisis_review <- read_csv('thisis2.csv')
+thisis_review
+glimpse(thisis_review)
+
+#전처리
+thisis_review <- as.tibble(thisis_review)
+thisis_review
+
+##Date열 날짜형으로 변환
+library(tidyverse)
+library(lubridate)
+thisis_review
+thisis_review <- thisis_review %>% mutate(Date = ymd(Date)) #열추가
+thisis_review <- thisis_review %>% arrange(desc(Date)) #정렬
+
+##텍스트열 전처리
+library(stringr)
+thisis <- thisis_review %>% mutate(Review = str_replace_all(Review,"[^가-힣]"," "),
+                                   Review = str_squish(Review))#가~힣 외 문자 삭제
+
+
+###전처리 된 티블
+thisis   
+
+#분석
+
+##리뷰 개수 
+nrow(thisis) #112개 총 리뷰 갯수
+
+thisis_ym <- thisis %>% mutate(ym = format(Date,'%Y-%m')) #연월 열 생성
+thisis_y <-  thisis %>% mutate(y  = format(Date,"%Y")) #연 열 생성 
+
+###연도별 리뷰 갯수
+y_count <- thisis_y %>% count(y)
+y_count
+
+ggplot(y_count,aes(y,n))+
+  geom_bar(stat = 'identity',mapping = aes(fill = y),colour='blue')+
+  geom_label(aes(label=n),nudge_y = 1.1)+
+  coord_flip()
+####2016~2022 = 49개 < 2015 = 63개 -->마케팅 활동이 그동안 부족했음
+
+
+###연월별 리뷰 갯수
+ym_count <- thisis_ym %>% count(ym)
+ym_count <- ym_count %>% mutate(y = str_sub(ym,1,4))
+ym_count
+
+ggplot(ym_count,aes(ym,n))+
+  geom_bar(stat = 'identity',mapping = aes(fill = y),colour='blue')+
+  geom_label(aes(label=n),nudge_y = 1.1)+
+  coord_flip()
+##월별로도 한번 보세용
+
+#텍스트 분석
+## 토큰화
+library(tidytext)
+library(KoNLP)
+
+thisis
+thisis_text <- thisis
+thisis_text <- thisis_text %>% unnest_tokens(input = Review,
+                                             output = word,
+                                             token = extractNoun) #단어별로 나눔
+thisis_text
+head(thisis_text)
+tail(thisis_text)
+
+#연도별 단어 빈도분석
+thisis_text <- thisis_text %>% mutate(Date = year(Date))
+
+frequency <- thisis_text %>% 
+  count(Date,word) %>%
+  filter(str_count(word)>1) #1글자 제거
+frequency
+
+##연도별로 가장 많이 사용된 단어 5개씩
+top5 <- frequency %>%
+  group_by(Date) %>%
+  slice_max(n,n=5,with_ties = F)
+top5
+
+#그래프로 보기
+library(ggplot2)
+ggplot(top5, aes(x = reorder_within(word, n, Date),
+                 y = n,
+                 fill = Date)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ Date, scales = "free_y")+
+  scale_x_reordered() +
+  labs(x = NULL) + # x축 삭제
+  theme(text = element_text(family = "nanumgothic")) # 폰트
+
+#### 2015년 긍정 단어와 2020 부정단어가 눈에 띔, 2022 최고가 있는건 긍정적
+#### 하지만 우리가 주목해야 하는건 응원이 아닌 유용성을 주는가? 임 
+
+###앱 리뉴얼 19년 전후로 빈도분석
+
+#standard 열 생성 
+thisis_text_stand <- thisis_text %>%
+  mutate('standard' = ifelse(Date >= 2019,'after','before'))
+thisis_text_stand 
+
+#19년 전후 단어 빈도분석
+frequency19 <- thisis_text_stand %>% 
+  count(standard,word) %>%
+  filter(str_count(word)>1)
+frequency19 
+
+#각각 가장 많이 사용된 단어 10개
+top10 <- frequency19 %>%
+  group_by(standard) %>%
+  slice_max(n,n=10,with_ties = F)
+top10
+
+#그래프로 보기
+ggplot(top10, aes(x = reorder(word, n),
+                  y = n,
+                  fill = standard)) +
+  geom_col() +
+  geom_label(aes(label=n),nudge_y = 1.1)+
+  coord_flip() +
+  facet_wrap(~ standard,scales = 'free_y')
+
+###리뉴얼 이후 전화번호, 버스, 동아리 등 기능적 언급이 많아짐
+###단 이 댓글이 긍정인지 부정인지 볼 필요 있음
+
+
+
+
+
+##2019년 기준 전후 감성분석을 해보자 - 감성사전을 조인하여 더 정확하게 보자는 뜻
+dic <- read_csv("knu_sentiment_lexicon.csv") #경북대 감성사전 사용
+summary(dic)
+
+thisis_text_senti <- thisis_text_stand %>%
+  left_join(dic, by = "word") %>% # 감정 점수 부여
+  mutate(polarity = ifelse(is.na(polarity), 0, polarity), # NA를 0으로 변환
+         sentiment = ifelse(polarity == 2, "긍정", # 감정 범주 분류
+                            ifelse(polarity == -2, "부정", "중립")))
+thisis_text_senti
+
+#가장많이 쓴 단어는?
+top10_word <- thisis_text_senti %>%
+  filter(str_count(word) >= 2) %>%
+  count(standard, sentiment, word) %>%
+  group_by(standard, sentiment) %>%
+  slice_max(n, n = 10, with_ties = F)
+top10_word
+
+
+# 그래프 그리기
+ggplot(top10_word, aes(x = reorder_within(word, n, standard),
+                       y = n,
+                       fill = sentiment)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(standard ~ sentiment, # 후보, 감정 범주별 그래프 생성
+             scales = "free") +
+  scale_x_reordered()
+
+#after에서 편리,성공이 빠지고 부정어인 잘못이 생김
+#중립 중에서도 before의 유용이 빠짐
+#학생들에게 편리를 주기 위한 어플인 만큼, 치명적임
+#오류를 잡았으나, 유용성이 줄어들었다고 판단됨
